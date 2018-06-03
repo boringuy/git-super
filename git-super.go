@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/fatih/color"
-	"gopkg.in/ini.v1"
+	"github.com/go-ini/ini"
 	"os"
 	"os/exec"
 	"path/filepath"

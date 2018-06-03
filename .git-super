@@ -1,0 +1,10 @@
+[subprojects]
+
+[commands]
+status = yes
+fetch  = yes
+pull   = yes
+log    = yes
+commit = yes
+
+
