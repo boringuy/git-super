@@ -1,3 +1,6 @@
+# Intro:
+git-super is a script to run git command in all it's managed repos and summarize the output. The "status" command is a special formatted report of the status output in each repo. The goal is to give a easy to read summary of what's changed and what local branch and tracking branch each repo is in.
+
 # Required:
 
 govendor
@@ -11,7 +14,9 @@ $ govendor fetch github.com/go-ini/ini
 ```
 
 # Build:
+```
 $ go build
+```
 
 # Usage:
 * put the git-super build in your executable path
