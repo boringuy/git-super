@@ -34,3 +34,5 @@ Then, try:
 ```
 $ git super status
 ```
+
+Other git commands is supported but needed to be explicitly allowed in the [commands] section in the .git-super file. The script basically iterate all the managed repo and run the git command (with all the command line options) for you and print out the output of each command at the end. It can be slow because it's currently single threaded.
