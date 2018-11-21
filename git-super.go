@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"fmt"
+        "github.com/bmatcuk/doublestar"
 	"github.com/fatih/color"
 	"github.com/go-ini/ini"
+	"io/ioutil"
 	"os"
 	"os/exec"
-	"path/filepath"
+        "path/filepath"
 	"sort"
 	"strings"
 )
@@ -206,9 +208,9 @@ func RunGenericGitCommand(projectMap *ProjectInfoMap, cmd []string, project stri
 }
 
 func DiscoverGitRepos(iniFile *ini.File) bool {
-	gitRepos, err := filepath.Glob("./*/.git")
+	gitRepos, err := doublestar.Glob("./**/.git")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "err: Failed to discover git repos")
+		fmt.Fprintf(os.Stderr, "error: Failed to discover git repos")
 		os.Exit(1)
 	}
 	section := iniFile.Section("subprojects")
@@ -217,7 +219,7 @@ func DiscoverGitRepos(iniFile *ini.File) bool {
 		if !section.HasKey(projectName) {
 			_, err := section.NewKey(projectName, "./"+projectName)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "err: Failed to add %s to ini file", projectName)
+				fmt.Fprintf(os.Stderr, "error: Failed to add %s to ini file", projectName)
 				return false
 			}
 		}
@@ -235,6 +237,26 @@ func main() {
 	}
 
 	gitCmd := args[1:]
+
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		if gitCmd[0] == "discover" {
+			ini := []byte(`[subprojects]
+[commands]
+status = yes
+fetch  = yes
+pull   = yes
+log    = yes
+commit = yes`)
+			err := ioutil.WriteFile(configFile, ini, 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "rrror: %s", err)
+			}
+        	} else {
+			fmt.Fprintf(os.Stderr, "error: %s not found. Please run 'git super discover' to create it", configFile)
+			os.Exit(1)
+                }
+        }
+
 	config, err := ini.Load(configFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to load %s ini file\n", configFile)
@@ -250,7 +272,7 @@ func main() {
 			}
 			err = config.SaveTo(configFile)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "err: Failed to save ini file %s\n", configFile)
+				fmt.Fprintf(os.Stderr, "error: Failed to save ini file %s\n", configFile)
 				os.Rename(configFile+".bak", configFile)
 				os.Exit(1)
 			}

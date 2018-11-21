@@ -23,14 +23,13 @@ $ (cd $GOPATH/bin; go build git-super)
 ```
 
 # Usage:
-* put the git-super build in your executable path
-* copy the .git-super file to your project workspace that inclues all the git repos and run:
+* put the git-super executable in your executable path
 
 ```
 $ git super discover
 ```
 
-It will walk all the directories to find git repo and list them in .git-super
+It will walk all the directories recursively to find git repo and list them in .git-super
 Remove those you don't want git-super to manage in the [subprojects] section
 
 Then, try:
