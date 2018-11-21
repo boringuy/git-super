@@ -1,13 +1,17 @@
 # Intro:
 git-super is a script to run git command in all it's managed repos and summarize the output. The "status" command is a special formatted report of the status output in each repo. The goal is to give a easy to read summary of what's changed and what local branch and tracking branch each repo is in.
 
+The project should be clone into $GOPATH/src/
+
 # Required:
 
 govendor
 
+
 # Fetch Dependencies:
 
 ```
+$ cd $GOPATH/src
 $ govendor init
 $ govendor fetch github.com/fatih/color
 $ govendor fetch github.com/go-ini/ini 
@@ -15,7 +19,7 @@ $ govendor fetch github.com/go-ini/ini
 
 # Build:
 ```
-$ go build
+$ (cd $GOPATH/bin; go build git-super)
 ```
 
 # Usage:
@@ -23,7 +27,7 @@ $ go build
 * copy the .git-super file to your project workspace that inclues all the git repos and run:
 
 ```
-$ git super init
+$ git super discover
 ```
 
 It will walk all the directories to find git repo and list them in .git-super
