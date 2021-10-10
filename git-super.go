@@ -3,13 +3,13 @@ package main
 import (
 	"bytes"
 	"fmt"
-        "github.com/bmatcuk/doublestar"
+	"github.com/bmatcuk/doublestar"
 	"github.com/fatih/color"
 	"github.com/go-ini/ini"
 	"io/ioutil"
 	"os"
 	"os/exec"
-        "path/filepath"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -251,11 +251,11 @@ commit = yes`)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "rrror: %s", err)
 			}
-        	} else {
+		} else {
 			fmt.Fprintf(os.Stderr, "error: %s not found. Please run 'git super discover' to create it", configFile)
 			os.Exit(1)
-                }
-        }
+		}
+	}
 
 	config, err := ini.Load(configFile)
 	if err != nil {
