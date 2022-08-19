@@ -3,15 +3,17 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"github.com/bmatcuk/doublestar"
-	"github.com/fatih/color"
-	"github.com/go-ini/ini"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/bmatcuk/doublestar"
+	"github.com/fatih/color"
+	"github.com/go-ini/ini"
 )
 
 type RepoStatus struct {
@@ -36,6 +38,35 @@ func GitGenericExec(cmd []string, dir string) ([]byte, error) {
 	statusCmd := exec.Command("git", cmd...)
 	statusCmd.Dir = dir
 	return statusCmd.Output()
+}
+
+func GitGenericExecGrep(gitArgs []string, grepArgs []string, dir string) ([]byte, error) {
+	var buffer bytes.Buffer
+	r, w := io.Pipe()
+	gitCmd := exec.Command("git", gitArgs...)
+	gitCmd.Dir = dir
+	gitCmd.Stdout = w
+	grepCmd := exec.Command("grep", grepArgs...)
+	grepCmd.Dir = dir
+	grepCmd.Stdin = r
+
+	grepCmd.Stdout = &buffer
+
+	err := gitCmd.Start()
+	if err != nil {
+		return buffer.Bytes(), err
+	}
+	err = grepCmd.Start()
+	if err != nil {
+		return buffer.Bytes(), err
+	}
+	err = gitCmd.Wait()
+	if err != nil {
+		return buffer.Bytes(), err
+	}
+	w.Close()
+	err = grepCmd.Wait()
+	return buffer.Bytes(), err
 }
 
 func GetHeadRemoteState(dir string) (tag []string, remoteBranch []string) {
@@ -207,6 +238,17 @@ func RunGenericGitCommand(projectMap *ProjectInfoMap, cmd []string, project stri
 	(*projectMap)[status.trackingBranch] = append((*projectMap)[status.trackingBranch], ProjectInfo{project, status, output, err, tags, remoteBranches})
 }
 
+func GrepLogs(projectMap *ProjectInfoMap, cmd []string, project string, dir string) {
+	output, err := GitGenericExecGrep([]string{"log", "--oneline"}, cmd[1:], dir)
+	status := GitStatus(dir)
+	tags, remoteBranches := GetHeadRemoteState(dir)
+	if (*projectMap)[status.trackingBranch] == nil {
+		(*projectMap)[status.trackingBranch] = make([]ProjectInfo, 0, 20)
+	}
+
+	(*projectMap)[status.trackingBranch] = append((*projectMap)[status.trackingBranch], ProjectInfo{project, status, output, err, tags, remoteBranches})
+}
+
 func DiscoverGitRepos(iniFile *ini.File) bool {
 	gitRepos, err := doublestar.Glob("./**/.git")
 	if err != nil {
@@ -246,10 +288,11 @@ status = yes
 fetch  = yes
 pull   = yes
 log    = yes
+grep   = yes
 commit = yes`)
 			err := ioutil.WriteFile(configFile, ini, 0644)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "rrror: %s", err)
+				fmt.Fprintf(os.Stderr, "error: %s", err)
 			}
 		} else {
 			fmt.Fprintf(os.Stderr, "error: %s not found. Please run 'git super discover' to create it", configFile)
@@ -291,6 +334,11 @@ commit = yes`)
 		os.Exit(1)
 	}
 
+	if gitCmd[0] == "grep" && len(gitCmd) == 1 {
+		fmt.Fprintf(os.Stderr, "error: %s command requires more arguments\n", gitCmd[0])
+		os.Exit(1)
+	}
+
 	projects := config.Section("subprojects").KeysHash()
 
 	sortedProjects := config.Section("subprojects").KeyStrings()
@@ -300,6 +348,8 @@ commit = yes`)
 	for _, name := range sortedProjects {
 		if gitCmd[0] == "status" {
 			GetStatus(&projectMap, name, projects[name])
+		} else if gitCmd[0] == "grep" {
+			GrepLogs(&projectMap, gitCmd, name, projects[name])
 		} else {
 			RunGenericGitCommand(&projectMap, gitCmd, name, projects[name])
 		}
