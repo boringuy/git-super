@@ -2,18 +2,23 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/bmatcuk/doublestar"
 	"github.com/fatih/color"
 	"github.com/go-ini/ini"
+	"github.com/google/go-github/v50/github"
+	"golang.org/x/oauth2"
 )
 
 type RepoStatus struct {
@@ -152,7 +157,10 @@ func OutputStatus(projectMap *ProjectInfoMap) {
 	whiteNormalColor := color.New(color.FgWhite)
 	yellowNormalColor := color.New(color.FgYellow)
 	greenNormalColor := color.New(color.FgGreen)
+	redNormalColor := color.New(color.FgRed)
+	blueNormalColor := color.New(color.FgHiBlue)
 
+	r := regexp.MustCompile(`ahead (?P<ahead>\d+)`)
 	for trackingBranch, projectInfos := range *projectMap {
 		whiteBoldColor.Printf("%s\n", trackingBranch)
 		for _, project := range projectInfos {
@@ -170,10 +178,22 @@ func OutputStatus(projectMap *ProjectInfoMap) {
 			colorPrint.Printf(" ")
 			colorPrint.Printf("%-20s", strings.Join(project.remoteBranches, ","))
 			colorPrint.Printf("\n")
+			matches := r.FindStringSubmatch(project.repoStatus.status)
+			if matches != nil {
+				output, err := GitGenericExec([]string{"log", "--oneline", "-n" + matches[1]}, project.name)
+				if err == nil {
+					lines := strings.Split(string(output), "\n")
+					for _, line := range lines {
+						blueNormalColor.Printf("        %s\n", line)
+					}
+				} else {
+					redNormalColor.Printf("%s\n", err)
+				}
+
+			}
 			for i := 0; i < len(project.repoStatus.modifiedFiles); i++ {
 				colorPrint.Printf("        %s\n", project.repoStatus.modifiedFiles[i])
 			}
-
 		}
 	}
 }
@@ -247,6 +267,80 @@ func GrepLogs(projectMap *ProjectInfoMap, cmd []string, project string, dir stri
 	}
 
 	(*projectMap)[status.trackingBranch] = append((*projectMap)[status.trackingBranch], ProjectInfo{project, status, output, err, tags, remoteBranches})
+}
+
+func GithubPr(projectMap *ProjectInfoMap, cmd []string, project string, dir string, token string) (bool, string) {
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	oauth2Client := oauth2.NewClient(ctx, ts)
+
+	output, err := GitGenericExecGrep([]string{"log", "--oneline"}, cmd[1:2], dir)
+	status := GitStatus(dir)
+
+	if len(output) <= 0 || err != nil {
+		return false, ""
+	}
+
+	parts := strings.Split(status.trackingBranch, "/")
+	var mergeToBranch string
+	if len(parts) == 2 {
+		mergeToBranch = parts[1]
+	} else {
+		mergeToBranch = status.trackingBranch
+	}
+
+	var url string
+	url, err = CreateGithubPr(ctx, oauth2Client, project, mergeToBranch, cmd[2], dir)
+	if err != nil {
+		fmt.Errorf(err.Error())
+		return false, ""
+	}
+
+	return true, url
+}
+
+func CreateGithubPr(ctx context.Context, oauth2Client *http.Client, project, mergeToBranch, remoteBranchName, dir string) (string, error) {
+	fmt.Printf("%s - %s:\n", project, dir)
+	//	fmt.Printf("gh pr create -B %s -t \"%s\" -f\n", mergeToBranch, remoteBranchName)
+
+	var buffer bytes.Buffer
+	remoteArg := "HEAD:" + remoteBranchName
+	gitCmd := exec.Command("git", "push", "origin", remoteArg)
+	gitCmd.Dir = dir
+	gitCmd.Stdout = &buffer
+
+	err := gitCmd.Start()
+	if err != nil {
+		return string(buffer.Bytes()), err
+	}
+
+	err = gitCmd.Wait()
+	if err != nil {
+		return string(buffer.Bytes()), err
+	}
+
+	//	fmt.Println(buffer.Bytes())
+
+	client := github.NewClient(oauth2Client)
+
+	newPR := &github.NewPullRequest{
+		Title:               github.String(remoteBranchName),
+		Head:                github.String(remoteBranchName),
+		Base:                github.String(mergeToBranch),
+		Body:                github.String(""),
+		MaintainerCanModify: github.Bool(true),
+	}
+
+	pr, _, err := client.PullRequests.Create(ctx, "stackpath", project, newPR)
+	if err != nil {
+		fmt.Println(err)
+		return "", err
+	}
+
+	fmt.Printf("PR created: %s\n", pr.GetHTMLURL())
+	return pr.GetHTMLURL(), nil
 }
 
 func DiscoverGitRepos(iniFile *ini.File) bool {
@@ -334,9 +428,22 @@ commit = yes`)
 		os.Exit(1)
 	}
 
-	if gitCmd[0] == "grep" && len(gitCmd) == 1 {
-		fmt.Fprintf(os.Stderr, "error: %s command requires more arguments\n", gitCmd[0])
-		os.Exit(1)
+	githubToken := config.Section("github").Key("token").String()
+	switch gitCmd[0] {
+	case "grep":
+		if len(gitCmd) == 1 {
+			fmt.Fprintf(os.Stderr, "error: %s command requires more arguments\n", gitCmd[0])
+			os.Exit(1)
+		}
+	case "pr":
+		if len(gitCmd) != 3 {
+			fmt.Fprintf(os.Stderr, "usage: git super pr <log_pattern> <pr_branch_name>\n")
+			os.Exit(1)
+		}
+		if len(githubToken) == 0 {
+			fmt.Fprintf(os.Stderr, "error: github token is not set in .git-super\n")
+			os.Exit(1)
+		}
 	}
 
 	projects := config.Section("subprojects").KeysHash()
@@ -345,18 +452,34 @@ commit = yes`)
 	sort.Strings(sortedProjects)
 
 	projectMap := make(ProjectInfoMap)
+	var prUrls []string
 	for _, name := range sortedProjects {
 		if gitCmd[0] == "status" {
 			GetStatus(&projectMap, name, projects[name])
 		} else if gitCmd[0] == "grep" {
 			GrepLogs(&projectMap, gitCmd, name, projects[name])
+		} else if gitCmd[0] == "pr" {
+			ret, prUrl := GithubPr(&projectMap, gitCmd, name, projects[name], githubToken)
+			if ret {
+				prUrls = append(prUrls, prUrl)
+				//				fmt.Printf("urls size: %d\n", len(prUrls))
+			}
 		} else {
 			RunGenericGitCommand(&projectMap, gitCmd, name, projects[name])
 		}
 	}
-	if gitCmd[0] == "status" {
+
+	switch gitCmd[0] {
+	case "status":
 		OutputStatus(&projectMap)
-	} else {
+		break
+	case "pr":
+		//		fmt.Println(prUrls)
+		for _, url := range prUrls {
+			fmt.Println(url)
+		}
+		break
+	default:
 		OutputGeneric(&projectMap)
 	}
 
