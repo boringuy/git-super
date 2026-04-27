@@ -36,6 +36,11 @@ enum Action {
     Generic,
     Grep,
     Pr,
+    Checkout {
+        new_branch: Option<String>,
+        alias_map: Option<BTreeMap<String, String>>,
+        raw_target: String,
+    },
 }
 
 fn git_exec(args: &[&str], dir: &str) -> Result<String, String> {
@@ -86,6 +91,15 @@ fn get_head_remote_state(dir: &str) -> (Vec<String>, Vec<String>) {
         }
     }
     (tags, remote_branches)
+}
+
+fn resolve_alias(config: &Ini, name: &str) -> Option<BTreeMap<String, String>> {
+    let section_name = format!("branch_alias.{}", name);
+    config.section(Some(section_name.as_str())).map(|sec| {
+        sec.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    })
 }
 
 fn git_status(dir: &str) -> RepoStatus {
@@ -217,6 +231,57 @@ fn process_project(
                     (None, None)
                 }
             }
+        }
+        Action::Checkout {
+            new_branch,
+            alias_map,
+            raw_target,
+        } => {
+            let resolved_target: Option<String> = match alias_map {
+                Some(map) => map.get(name).cloned(),
+                None => {
+                    if raw_target.is_empty() {
+                        None
+                    } else {
+                        Some(raw_target.clone())
+                    }
+                }
+            };
+
+            let mut output = String::new();
+            let mut err: Option<String> = None;
+
+            if alias_map.is_some() && resolved_target.is_none() {
+                err = Some(format!("no branch alias entry for {}", name));
+            } else {
+                let mut argv: Vec<&str> = vec!["checkout"];
+                if let Some(nb) = new_branch.as_deref() {
+                    argv.push("-b");
+                    argv.push(nb);
+                }
+                if let Some(t) = resolved_target.as_deref() {
+                    argv.push(t);
+                }
+                match git_exec(&argv, dir) {
+                    Ok(o) => output = o,
+                    Err(e) => err = Some(e),
+                }
+            }
+
+            let status = git_status(dir);
+            let (tags, remote_branches) = get_head_remote_state(dir);
+            (
+                Some(ProjectInfo {
+                    name: name.to_string(),
+                    dir: dir.to_string(),
+                    repo_status: status,
+                    cmd_output: output,
+                    cmd_error: err,
+                    tags,
+                    remote_branches,
+                }),
+                None,
+            )
         }
     }
 }
@@ -373,6 +438,13 @@ fn output_generic(project_map: &ProjectInfoMap) {
                         println!("{}", pretty.white().dimmed());
                     }
                 }
+            } else if let Some(err) = &project.cmd_error {
+                for line in err.split('\n') {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    println!("{}", format!("        {}", line).red().bold());
+                }
             }
         }
     }
@@ -425,7 +497,7 @@ fn discover(ini: &mut Ini) -> bool {
 }
 
 fn write_default_config(path: &str) -> std::io::Result<()> {
-    let contents = "[subprojects]\n[commands]\nstatus = yes\nfetch  = yes\npull   = yes\nlog    = yes\ngrep   = yes\ncommit = yes\n";
+    let contents = "[subprojects]\n[commands]\nstatus   = yes\nfetch    = yes\npull     = yes\nlog      = yes\ngrep     = yes\ncommit   = yes\ncheckout = yes\n";
     std::fs::write(path, contents)
 }
 
@@ -522,6 +594,38 @@ fn main() {
         "status" => Action::Status,
         "grep" => Action::Grep,
         "pr" => Action::Pr,
+        "checkout" => {
+            let mut new_branch: Option<String> = None;
+            let mut target: Option<String> = None;
+            let mut i = 1;
+            while i < git_cmd.len() {
+                if git_cmd[i] == "-b" {
+                    if i + 1 >= git_cmd.len() {
+                        eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
+                        process::exit(1);
+                    }
+                    new_branch = Some(git_cmd[i + 1].clone());
+                    i += 2;
+                } else {
+                    if target.is_some() {
+                        eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
+                        process::exit(1);
+                    }
+                    target = Some(git_cmd[i].clone());
+                    i += 1;
+                }
+            }
+            if new_branch.is_none() && target.is_none() {
+                eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
+                process::exit(1);
+            }
+            let alias_map = target.as_deref().and_then(|t| resolve_alias(&config, t));
+            Action::Checkout {
+                new_branch,
+                alias_map,
+                raw_target: target.unwrap_or_default(),
+            }
+        }
         _ => Action::Generic,
     };
 
