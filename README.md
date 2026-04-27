@@ -1,25 +1,29 @@
 # Intro:
-git-super is a script to run git command in all it's managed repos and summarize the output. The "status" command is a special formatted report of the status output in each repo. The goal is to give a easy to read summary of what's changed and what local branch and tracking branch each repo is in.
+git-super is a tool to run a git command across all of its managed repos and summarize the output. The `status` command produces a specially formatted report of each repo's status. The goal is an easy-to-read summary of what's changed and which local/tracking branch each repo is on.
+
+The repos are processed in parallel; results are gathered and rendered together at the end.
 
 # Build:
 ```
-$ go build
+$ cargo build --release
 ```
 
+The binary will be at `target/release/git-super`.
+
 # Usage:
-* put the git-super executable in your executable path
+* put the `git-super` executable in your `PATH`
 
 ```
 $ git super discover
 ```
 
-It will walk all the directories recursively to find git repo and list them in .git-super
-Remove those you don't want git-super to manage in the [subprojects] section
+This walks the directories recursively to find git repos and lists them in `.git-super`.
+Remove any you don't want git-super to manage from the `[subprojects]` section.
 
-Then, try:
+Then try:
 
 ```
 $ git super status
 ```
 
-Other git commands is supported but needed to be explicitly allowed in the [commands] section in the .git-super file. The script basically iterate all the managed repo and run the git command (with all the command line options) for you and print out the output of each command at the end. It can be slow because it's currently single threaded.
+Other git commands are supported but must be explicitly allowed in the `[commands]` section of `.git-super`. The tool iterates over every managed repo and runs the git command (with all its arguments) for you, then prints the output of each command at the end. Repos are processed in parallel using a worker pool, so runs are typically fast even on a large number of repos.

@@ -1,0 +1,18 @@
+[package]
+name = "git-super"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+duct = "0.13"
+rayon = "1.10"
+rust-ini = "0.21"
+walkdir = "2.5"
+colored = "2.1"
+regex = "1.10"
+ureq = { version = "2.10", features = ["json"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+strip = true
