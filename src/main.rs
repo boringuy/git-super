@@ -145,6 +145,7 @@ fn process_project(
     action: &Action,
     args: &[String],
     token: &str,
+    org: &str,
 ) -> (Option<ProjectInfo>, Option<String>) {
     match action {
         Action::Status => {
@@ -224,7 +225,7 @@ fn process_project(
                 status.tracking_branch.clone()
             };
 
-            match create_github_pr(name, &merge_to_branch, branch_name, dir, token) {
+            match create_github_pr(name, &merge_to_branch, branch_name, dir, token, org) {
                 Ok(url) => (None, Some(url)),
                 Err(e) => {
                     eprintln!("error creating PR for {}: {}", name, e);
@@ -292,6 +293,7 @@ fn create_github_pr(
     branch_name: &str,
     dir: &str,
     token: &str,
+    org: &str,
 ) -> Result<String, String> {
     println!("{} - {}:", project, dir);
     let remote_arg = format!("HEAD:{}", branch_name);
@@ -302,10 +304,7 @@ fn create_github_pr(
         .run()
         .map_err(|e| e.to_string())?;
 
-    let url = format!(
-        "https://api.github.com/repos/stackpath/{}/pulls",
-        project
-    );
+    let url = format!("https://api.github.com/repos/{}/{}/pulls", org, project);
     let body = json!({
         "title": branch_name,
         "head": branch_name,
@@ -564,9 +563,13 @@ fn main() {
         process::exit(1);
     }
 
-    let github_token = config
-        .section(Some("github"))
+    let github_section = config.section(Some("github"));
+    let github_token = github_section
         .and_then(|s| s.get("token"))
+        .unwrap_or("")
+        .to_string();
+    let github_org = github_section
+        .and_then(|s| s.get("org"))
         .unwrap_or("")
         .to_string();
 
@@ -584,6 +587,10 @@ fn main() {
             }
             if github_token.is_empty() {
                 eprintln!("error: github token is not set in .git-super");
+                process::exit(1);
+            }
+            if github_org.is_empty() {
+                eprintln!("error: github org is not set in .git-super");
                 process::exit(1);
             }
         }
@@ -641,7 +648,9 @@ fn main() {
 
     let results: Vec<(Option<ProjectInfo>, Option<String>)> = sorted_projects
         .par_iter()
-        .map(|(name, dir)| process_project(name, dir, &action, &git_cmd, &github_token))
+        .map(|(name, dir)| {
+            process_project(name, dir, &action, &git_cmd, &github_token, &github_org)
+        })
         .collect();
 
     let mut project_map: ProjectInfoMap = BTreeMap::new();

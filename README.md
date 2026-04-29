@@ -68,11 +68,15 @@ Anything else is run as `git <cmd> <args...>` in every subproject.
 
 ## `[github]`
 
-Token used by the `pr` command for the GitHub API.
+Configuration for the `pr` command.
+
+- `token` — GitHub personal access token with `repo` scope.
+- `org` — GitHub organization (or user) that owns the repos.
 
 ```ini
 [github]
 token = ghp_xxxxxxxxxxxxxxxxxxxx
+org   = my-github-org
 ```
 
 ## `[branch_alias.<alias_name>]`
