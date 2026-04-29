@@ -505,6 +505,125 @@ fn usage_and_exit(prog: &str) -> ! {
     process::exit(1);
 }
 
+fn parse_checkout_action(args: &[String], config: &Ini) -> Action {
+    let mut new_branch: Option<String> = None;
+    let mut target: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "-b" {
+            if i + 1 >= args.len() {
+                eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
+                process::exit(1);
+            }
+            new_branch = Some(args[i + 1].clone());
+            i += 2;
+        } else {
+            if target.is_some() {
+                eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
+                process::exit(1);
+            }
+            target = Some(args[i].clone());
+            i += 1;
+        }
+    }
+    if new_branch.is_none() && target.is_none() {
+        eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
+        process::exit(1);
+    }
+    let alias_map = target.as_deref().and_then(|t| resolve_alias(config, t));
+    Action::Checkout {
+        new_branch,
+        alias_map,
+        raw_target: target.unwrap_or_default(),
+    }
+}
+
+fn collect_status_map(projects: &[(String, String)]) -> ProjectInfoMap {
+    let mut map: ProjectInfoMap = projects
+        .par_iter()
+        .map(|(name, dir)| {
+            let status = git_status(dir);
+            let (tags, remote_branches) = get_head_remote_state(dir);
+            ProjectInfo {
+                name: name.clone(),
+                dir: dir.clone(),
+                repo_status: status,
+                cmd_output: String::new(),
+                cmd_error: None,
+                tags,
+                remote_branches,
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .fold(ProjectInfoMap::new(), |mut m, info| {
+            m.entry(info.repo_status.tracking_branch.clone())
+                .or_insert_with(Vec::new)
+                .push(info);
+            m
+        });
+    for v in map.values_mut() {
+        v.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    map
+}
+
+fn results_to_project_map(
+    results: &[(Option<ProjectInfo>, Option<String>)],
+) -> (ProjectInfoMap, Vec<String>) {
+    let mut map: ProjectInfoMap = BTreeMap::new();
+    let mut pr_urls: Vec<String> = Vec::new();
+    for (info, url) in results {
+        if let Some(info) = info {
+            map.entry(info.repo_status.tracking_branch.clone())
+                .or_insert_with(Vec::new)
+                .push(info.clone());
+        }
+        if let Some(u) = url {
+            pr_urls.push(u.clone());
+        }
+    }
+    for v in map.values_mut() {
+        v.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    (map, pr_urls)
+}
+
+fn handle_checkout_rollback(
+    sorted_projects: &[(String, String)],
+    orig_branches: Vec<String>,
+    results: &[(Option<ProjectInfo>, Option<String>)],
+) -> bool {
+    let has_error = results
+        .iter()
+        .any(|(info, _)| info.as_ref().map_or(false, |i| i.cmd_error.is_some()));
+    if !has_error {
+        return false;
+    }
+
+    let (pre_rollback_map, _) = results_to_project_map(results);
+    output_generic(&pre_rollback_map);
+
+    eprintln!("checkout failed for one or more projects, rolling back...");
+    sorted_projects
+        .iter()
+        .zip(orig_branches.iter())
+        .zip(results.iter())
+        .for_each(|(((name, dir), orig_branch), (info, _))| {
+            if info.as_ref().map_or(false, |i| i.cmd_error.is_none()) {
+                eprint!("  rolling back {}... ", name);
+                match git_exec(&["checkout", orig_branch.as_str()], dir) {
+                    Ok(_) => eprintln!("ok"),
+                    Err(e) => eprintln!("failed: {}", e),
+                }
+            }
+        });
+
+    eprintln!("\nstate after rollback:");
+    output_status(&collect_status_map(sorted_projects));
+    true
+}
+
 fn main() {
     let config_file = ".git-super";
     let args: Vec<String> = std::env::args().collect();
@@ -601,38 +720,7 @@ fn main() {
         "status" => Action::Status,
         "grep" => Action::Grep,
         "pr" => Action::Pr,
-        "checkout" => {
-            let mut new_branch: Option<String> = None;
-            let mut target: Option<String> = None;
-            let mut i = 1;
-            while i < git_cmd.len() {
-                if git_cmd[i] == "-b" {
-                    if i + 1 >= git_cmd.len() {
-                        eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
-                        process::exit(1);
-                    }
-                    new_branch = Some(git_cmd[i + 1].clone());
-                    i += 2;
-                } else {
-                    if target.is_some() {
-                        eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
-                        process::exit(1);
-                    }
-                    target = Some(git_cmd[i].clone());
-                    i += 1;
-                }
-            }
-            if new_branch.is_none() && target.is_none() {
-                eprintln!("usage: git super checkout [-b <new_branch>] [<target>]");
-                process::exit(1);
-            }
-            let alias_map = target.as_deref().and_then(|t| resolve_alias(&config, t));
-            Action::Checkout {
-                new_branch,
-                alias_map,
-                raw_target: target.unwrap_or_default(),
-            }
-        }
+        "checkout" => parse_checkout_action(&git_cmd, &config),
         _ => Action::Generic,
     };
 
@@ -646,6 +734,17 @@ fn main() {
         .unwrap_or_default();
     sorted_projects.sort_by(|a, b| a.0.cmp(&b.0));
 
+    let original_branches: Option<Vec<String>> = if matches!(action, Action::Checkout { .. }) {
+        Some(
+            sorted_projects
+                .par_iter()
+                .map(|(_, dir)| git_status(dir).current_branch)
+                .collect(),
+        )
+    } else {
+        None
+    };
+
     let results: Vec<(Option<ProjectInfo>, Option<String>)> = sorted_projects
         .par_iter()
         .map(|(name, dir)| {
@@ -653,23 +752,13 @@ fn main() {
         })
         .collect();
 
-    let mut project_map: ProjectInfoMap = BTreeMap::new();
-    let mut pr_urls: Vec<String> = Vec::new();
-    for (info, url) in results {
-        if let Some(info) = info {
-            project_map
-                .entry(info.repo_status.tracking_branch.clone())
-                .or_insert_with(Vec::new)
-                .push(info);
-        }
-        if let Some(u) = url {
-            pr_urls.push(u);
+    if let Some(orig_branches) = original_branches {
+        if handle_checkout_rollback(&sorted_projects, orig_branches, &results) {
+            return;
         }
     }
 
-    for v in project_map.values_mut() {
-        v.sort_by(|a, b| a.name.cmp(&b.name));
-    }
+    let (project_map, pr_urls) = results_to_project_map(&results);
 
     match git_cmd[0].as_str() {
         "status" => output_status(&project_map),
