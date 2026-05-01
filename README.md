@@ -28,6 +28,38 @@ $ git super status
 
 Other git commands are supported but must be explicitly allowed in the `[commands]` section of `.git-super`. The tool iterates over every managed repo and runs the git command (with all its arguments) for you, then prints the output of each command at the end. Repos are processed in parallel using a worker pool, so runs are typically fast even on a large number of repos.
 
+# Bash Completion
+
+A completion script is provided at `completions/git-super.bash`. It completes subcommands for both `git-super` and `git super`.
+
+## Setup
+
+Source the file in your `.bashrc` or `.bash_profile`:
+
+```bash
+source /path/to/git-super/completions/git-super.bash
+```
+
+## `git super` subcommand completion
+
+For `git super <tab>` to work, git's own bash completion must be loaded first. If it isn't already active in your shell, source it before the git-super completion:
+
+```bash
+# macOS — Homebrew git
+source "$(brew --prefix)/etc/bash_completion.d/git-completion.bash"
+
+# macOS — Xcode CLT git
+source /Library/Developer/CommandLineTools/usr/share/git-core/git-completion.bash
+```
+
+You can check whether it's loaded with:
+
+```bash
+declare -f __git_main >/dev/null 2>&1 && echo "loaded" || echo "missing"
+```
+
+Once git's completion is active, `git super <tab>` will complete subcommands automatically — the completion script hooks in via the standard `_git_super` naming convention that git's completion dispatch recognises.
+
 # Configuration: `.git-super`
 
 `.git-super` is an INI file at the root of where you run `git super`. It supports the following sections.
