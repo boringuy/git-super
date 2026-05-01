@@ -625,7 +625,7 @@ fn handle_checkout_rollback(
 }
 
 fn main() {
-    let config_file = ".git-super";
+    let config_filename = ".git-super";
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         usage_and_exit(&args[0]);
@@ -633,38 +633,51 @@ fn main() {
 
     let git_cmd: Vec<String> = args[1..].to_vec();
 
-    if !std::path::Path::new(config_file).exists() {
+    let config_file: std::path::PathBuf = {
+        let mut dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        loop {
+            let candidate = dir.join(config_filename);
+            if candidate.exists() {
+                break candidate;
+            }
+            if !dir.pop() {
+                break std::path::PathBuf::from(config_filename);
+            }
+        }
+    };
+
+    if !config_file.exists() {
         if git_cmd[0] == "discover" {
-            if let Err(e) = write_default_config(config_file) {
+            if let Err(e) = write_default_config(config_filename) {
                 eprintln!("error: {}", e);
             }
         } else {
             eprintln!(
                 "error: {} not found. Please run 'git super discover' to create it",
-                config_file
+                config_filename
             );
             process::exit(1);
         }
     }
 
-    let mut config = match Ini::load_from_file(config_file) {
+    let mut config = match Ini::load_from_file(&config_file) {
         Ok(c) => c,
         Err(_) => {
-            eprintln!("error: failed to load {} ini file", config_file);
+            eprintln!("error: failed to load {} ini file", config_file.display());
             process::exit(1);
         }
     };
 
     if git_cmd[0] == "discover" {
         if discover(&mut config) {
-            let bak = format!("{}.bak", config_file);
-            if let Err(e) = std::fs::rename(config_file, &bak) {
+            let bak = format!("{}.bak", config_file.display());
+            if let Err(e) = std::fs::rename(&config_file, &bak) {
                 eprintln!("{}", e);
                 process::exit(1);
             }
-            if let Err(_) = config.write_to_file(config_file) {
-                eprintln!("error: Failed to save ini file {}", config_file);
-                let _ = std::fs::rename(&bak, config_file);
+            if let Err(_) = config.write_to_file(&config_file) {
+                eprintln!("error: Failed to save ini file {}", config_file.display());
+                let _ = std::fs::rename(&bak, &config_file);
                 process::exit(1);
             }
         }
